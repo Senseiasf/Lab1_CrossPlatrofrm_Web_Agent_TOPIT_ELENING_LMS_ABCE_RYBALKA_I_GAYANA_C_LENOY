@@ -2,13 +2,10 @@ cmake_minimum_required(VERSION 3.15)
 project(WebAgent)
 
 set(CMAKE_CXX_STANDARD 17)
+cmake_policy(SET CMP0135 NEW)
 
-# ─── Зависимости ────────────────────────────────────────────
 include(FetchContent)
 
-
-# ИСПРАВЛЕНИЕ: Качаем готовый архив по прямой ссылке, а не через Git.
-# Это сработает на любом ПК, даже если Git не установлен.
 FetchContent_Declare(
     json
     URL https://github.com/nlohmann/json/releases/download/v3.11.2/json.tar.xz
@@ -26,29 +23,16 @@ set(CPR_FORCE_USE_SYSTEM_CURL OFF CACHE BOOL "" FORCE)
 set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(cpr)
 
-# На Linux предпочитаем системный libcurl, на Windows — тот, что тянет cpr.
 if(UNIX)
     find_package(CURL REQUIRED)
 endif()
 
-# ─── Основное приложение ────────────────────────────────────
 add_executable(${PROJECT_NAME}
     main.cpp
     HTTP_client.cpp
     json_functions.cpp
     consoletab.cpp
     logger.cpp
-)
-
-# ВНИМАНИЕ: Это создает Linux-файл с названием .exe. На Windows он не запустится!
-set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".exe")
-
-# 2. Создаем копию файла с расширением .out сразу после билда
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:${PROJECT_NAME}> 
-        "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.out"
-    COMMENT "Generating additional .out file..."
 )
 
 if(MSVC)
@@ -59,12 +43,12 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     cpr::cpr
     nlohmann_json::nlohmann_json
 )
+
 if(UNIX)
     target_link_libraries(${PROJECT_NAME} PRIVATE CURL::libcurl)
 endif()
 
-# ─── Тесты ──────────────────────────────────────────────────
-option(BUILD_TESTS "Собрать юнит-тесты" ON)
+option(BUILD_TESTS "Build unit tests" ON)
 
 if(BUILD_TESTS)
     enable_testing()
@@ -74,7 +58,6 @@ if(BUILD_TESTS)
         GIT_REPOSITORY https://github.com/google/googletest.git
         GIT_TAG v1.14.0
     )
-    # Не устанавливать GTest глобально
     set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
 
@@ -99,7 +82,6 @@ if(BUILD_TESTS)
         cpr::cpr
     )
 
-    # Регистрация в CTest
     include(GoogleTest)
     gtest_discover_tests(WebAgentTests)
 endif()

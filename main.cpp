@@ -23,6 +23,8 @@
 #include "json_functions.h"
 #include "logger.h"
 
+void pause_ui(bool pause);
+
 void save_keychain_safe();
 void update_uid_display();
 
@@ -230,7 +232,7 @@ std::string exec_command(const char* cmd) {
 void timer_thread() {
     while (true) {
         // Обновляем статус ПЕРЕД уходом в сон (оставляем для пользователя на русском)
-        update_console(0, "[Таймер | " + std::to_string(current_polling_interval) + "с] Ожидание...");
+        update_console(1, "[Таймер | " + std::to_string(current_polling_interval) + "с] Ожидание...");
 
         {
             std::unique_lock<std::mutex> lock(mtx);
@@ -244,7 +246,7 @@ void timer_thread() {
             // Если проснулись от пинга — реагируем визуально (для пользователя на русском)
             if (ping_flag.load()) {
                 ping_flag = false; // Сбрасываем флаг
-                update_console(0, "[Таймер] Внеочередной ручной опрос сервера...");
+                update_console(1, "[Таймер] Внеочередной ручной опрос сервера...");
                 std::this_thread::sleep_for(std::chrono::seconds(1)); // Чтобы юзер успел это прочитать
             }
         }
@@ -261,7 +263,7 @@ void timer_thread() {
         }
 
         if (req_task(safe_uid, safe_access_code, json_response) != 0) {
-            update_console(0, "[Таймер] Ошибка сети. Жду " + std::to_string(current_polling_interval) + "с");
+            update_console(1, "[Таймер] Ошибка сети. Жду " + std::to_string(current_polling_interval) + "с");
             continue; 
         }
 
@@ -287,7 +289,7 @@ void timer_thread() {
 
                 // Этот лог уходит на сервер, поэтому переводим на английский
                 log_message("TIMER", "Server changed polling interval to: " + std::to_string(current_polling_interval));
-                update_console(0, "[Таймер] Пауза от сервера: " + std::to_string(current_polling_interval) + "с");
+                update_console(1, "[Таймер] Пауза от сервера: " + std::to_string(current_polling_interval) + "с");
                 std::this_thread::sleep_for(std::chrono::seconds(2));
             }
             else if (res_code == "1") {
@@ -297,7 +299,7 @@ void timer_thread() {
 
                 // Переводим лог
                 log_message("TIMER", "New task received: " + task_type);
-                update_console(0, "[Таймер | " + std::to_string(current_polling_interval) + "с] Отдал задачу воркеру");
+                update_console(1, "[Таймер | " + std::to_string(current_polling_interval) + "с] Отдал задачу воркеру");
 
                 Task new_task;
                 new_task.session_id = current_sid;
@@ -321,7 +323,7 @@ void timer_thread() {
 
         } catch (const std::exception& e) {
             log_message("ERROR", "JSON Error: " + std::string(e.what()));
-            update_console(0, "[Таймер] Ошибка данных");
+            update_console(1, "[Таймер] Ошибка данных");
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
 #endif
@@ -338,7 +340,7 @@ void timer_thread() {
  * 4. Passes the task to the second queue for uploading to the server.
  */
 void worker_thread(int id) {
-    int line = id;
+    int line = id+1;
     update_console(line, "[Рабочий " + std::to_string(id) + "] Готов к работе");
 
     while (true) {
@@ -561,7 +563,7 @@ void worker_thread(int id) {
  * @param id Unique thread ID.
  */
 void worker_thread1(int id) {
-    int line = id;
+    int line = id+1;
     update_console(line, "[Рабочий " + std::to_string(id) + "] Запущен");
 
     while (true) {
@@ -640,10 +642,10 @@ void update_uid_display() {
     std::string current_uid;
     {
         std::lock_guard<std::mutex> auth_lock(auth_mtx);
-        current_uid = UID.empty() ? "НЕ ЗАДАН" : UID;
+        current_uid = UID.empty() ? "NOT SET" : UID;
     }
-    // Display global status on the free 7th line
-    update_console(7, "[Система] Текущий UID: " + current_uid);
+    // Пишем строго в СТРОКУ 0
+    update_console(0, "[Система] Текущий UID: " + current_uid);
 }
 
 // --- ФУНКЦИЯ 2: ИНТЕРАКТИВНОЕ МЕНЮ АВТОРИЗАЦИИ ---
@@ -654,7 +656,7 @@ void interactive_auth_menu(bool force_menu) {
     if (!force_menu && !last_active_uid.empty() && keychain.count(last_active_uid)) {
         UID = last_active_uid;
         access_code = keychain[UID];
-        std::cout << "\n[Система] Автоматический вход с UID: " << UID << "\n";
+        //std::cout << "\n[Система] Автоматический вход с UID: " << UID << "\n";
         need_interactive = false;
 
         std::string json_response, temp_code;
@@ -687,7 +689,15 @@ void interactive_auth_menu(bool force_menu) {
                 std::cout << "Введите желаемый UID (или '000' для случайного): ";
             }
 
-            std::cin >> input_str;
+            std::string raw_input;
+            std::getline(std::cin, raw_input);
+            
+            if (raw_input.empty() || raw_input.find_first_not_of(" \t") == std::string::npos) {
+                continue; // Нажали Enter впустую - просим ввести заново
+            }
+
+            std::stringstream ss(raw_input);
+            ss >> input_str;
 
             bool is_list_choice = false;
             if (!uid_list.empty()) {
@@ -754,7 +764,7 @@ void interactive_auth_menu(bool force_menu) {
         }
     }
     save_keychain_safe(); // Сохраняем сразу после выбора
-    update_uid_display(); // Обновляем uid
+    // ВНИМАНИЕ: Вызов update_uid_display() отсюда удален!
 }
 
 int main() {
@@ -794,16 +804,17 @@ int main() {
         return 1;
     }
 
-    std::cout << "\033[2J\033[H"; // Очистка экрана перед меню авторизации
-
+    std::cout << "\033[?1049h"; // 1. ВХОДИМ В АЛЬТ-БУФЕР СРАЗУ (Скрываем обычный терминал)
+    std::cout << "\033[2J\033[H"; // 2. Очищаем этот новый буфер
+    std::cout.flush();
+    
 #ifdef WORK_WITH_SERVICE
     // Вызываем логику интерактивной регистрации/авторизации
     interactive_auth_menu(false);
 #endif
 
-    // --- ПЕРЕХОД В РЕЖИМ DASHBOARD ---
-    // Очищаем экран, рисуем статусы потоков вверху и заголовок меню внизу
     init_console();
+    update_uid_display();
     draw_cmd_header();
 
     // Запуск пула потоков
@@ -820,36 +831,54 @@ int main() {
     
     while (true) {
         prompt_input(); 
-        std::cin >> cmd;
+        
+        std::string raw_input;
+        std::getline(std::cin, raw_input); // Читаем всё нажатие целиком
+        
+        // Если ничего не ввели или ввели только пробелы — перерисовываем строку
+        if (raw_input.empty() || raw_input.find_first_not_of(" \t") == std::string::npos) {
+            continue; 
+        }
+
+        // Вытаскиваем саму команду без лишних пробелов
+        std::stringstream ss(raw_input);
+        ss >> cmd;
 
         if (cmd == "q") {
-            print_cmd_response("[Система] Запущена процедура безопасного выхода...\n[Система] Дожидаемся завершения активных задач (это может занять время).");
-            log_message("SYSTEM", "User initiated safe exit (q). Waiting for threads to finish...");
+            print_cmd_response("[Система] Запущена процедура безопасного выхода...\n[Система] Дожидаемся завершения активных задач.");
+            log_message("SYSTEM", "User initiated safe exit (q).");
             std::lock_guard<std::mutex> lock(mtx);
             stop_flag = true;
+            cv_timer.notify_all();
+            cv_workers.notify_all();
+            cv_workers1.notify_all();
             break; 
         } 
         else if (cmd == "fq") {
-            print_cmd_response("[FATAL] Принудительное завершение агента!");
             log_message("SYSTEM", "User initiated forced termination (fq)!");
-            std::cout << "\033[15;1H\n";
-            std::cout.flush();
+            std::cout << "\033[?1049l"; // Возвращаем терминал в норму перед выходом
             std::_Exit(0); 
         }
         else if (cmd == "s") {
-            print_cmd_response("[Система] Ожидание завершения текущих задач перед сменой аккаунта...");
-            log_message("SYSTEM", "Account change requested (s). Waiting for tasks to finish...");
+            print_cmd_response("[Система] Ожидание завершения текущих задач...");
             
             while (!task_queue.empty()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
             std::this_thread::sleep_for(std::chrono::seconds(1)); 
             
-            std::cout << "\033[9;1H\033[0J";
-            interactive_auth_menu(true);
+            pause_ui(true); // Заморозили дашборд
             
+            std::cout << "\033[2J\033[H"; // Просто очистили альт-буфер
+            std::cout.flush();
+            
+            interactive_auth_menu(true); // Рисуем меню
+            
+            init_console(); // Опять очистили экран от меню
+            pause_ui(false); // Разморозили (дашборд отрисуется сам)
+            
+            update_uid_display();
             draw_cmd_header();
-            log_message("SYSTEM", "Account successfully changed to UID: " + (UID.empty() ? "NOT SET" : UID));
         }
         else if (cmd == "status") {
             std::string st = "=== СТАТУС АГЕНТА ===\nАктивный UID: " + UID + 
@@ -857,17 +886,14 @@ int main() {
                              "\nФайлов на отправку: " + std::to_string(task_queue1.size()) + 
                              "\n=====================";
             print_cmd_response(st);
-            log_message("SYSTEM", "User requested agent status");
         }
         else if (cmd == "ping") {
             print_cmd_response("[Система] Принудительный опрос сервера...");
-            log_message("SYSTEM", "Manual ping sent to server");
             ping_flag = true; 
             cv_timer.notify_all(); 
         }
         else if (cmd == "clear") {
             print_cmd_response(""); 
-            log_message("SYSTEM", "Console output cleared (clear)");
         }
         else if (cmd == "logs") {
             std::string log_output = "=== ПОСЛЕДНИЕ СИСТЕМНЫЕ ЛОГИ ===\n";
@@ -915,57 +941,44 @@ int main() {
             }
             
             print_cmd_response(log_output);
-            log_message("SYSTEM", "User requested logs output (logs)");
         }
         else if (cmd == "GOL") {
-            // Пишем в логи, как ты и просил
             log_message("SYSTEM", "GOOOOOOOOOOOOOOL");
-
-            // --- МАГИЯ АЛЬТЕРНАТИВНОГО БУФЕРА ЭКРАНА ---
-            // \033[?1049h - переключиться на резервный чистый экран
-            // \033[H - курсор в левый верхний угол
-            std::cout << "\033[?1049h\033[H"; 
+            pause_ui(true);
+            std::cout << "\033[2J\033[1;1H";
             
             std::cout << "\n\n\n\n";
-            std::cout << "   ██████╗  ██████╗  ██████╗  ██████╗  █████╗ \n";
+            std::cout << "   ███████╗  ██████╗  ██████╗  ██████╗  █████╗ \n";
             std::cout << "   ██╔════╝ ██╔═══██╗██╔═══██╗██╔═══██╗██╔══██╗\n";
             std::cout << "   ██║      ██║   ██║██║   ██║██║   ██║██║  ██║\n";
             std::cout << "   ██║      ██║   ██║██║   ██║██║   ██║██║  ██║\n";
             std::cout << "   ██║      ╚██████╔╝╚██████╔╝╚██████╔╝██║  ██║\n";
             std::cout << "   ╚═╝       ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝\n";
             
-            std::cout << "\n\n   >>> АГЕНТ (UID: " << (UID.empty() ? "АНОНИМ" : UID) << ") ЗАБИЛ ГОЛ! <<<\n";
+            std::cout << "\n\n   >>> АГЕНТ (UID: " << UID << ") ЗАБИЛ ГОЛ! <<<\n";
             std::cout.flush();
+            std::this_thread::sleep_for(std::chrono::milliseconds(800));
 
-            // Ждем 0.3 секунды
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-
-            // \033[?1049l - возвращаемся на основной экран (всё восстанавливается!)
-            std::cout << "\033[?1049l"; 
-            std::cout.flush();
-
-            // Выводим текст в интерфейсе
+            init_console();
+            pause_ui(false);
+            update_uid_display();
+            draw_cmd_header();
             print_cmd_response("Что это было? Наверное, показалось.");
         }
         else if (cmd == "h" || cmd == "help") {
-            print_cmd_response("--- ДОСТУПНЫЕ КОМАНДЫ ---\n  s      - Сменить аккаунт (UID)\n  status - Статус очередей и агента\n  logs   - Вывести последние 10 строк логов\n  ping   - Принудительно запросить задачу у сервера\n  clear  - Очистить экран\n  q      - Безопасный выход (дождаться задач)\n  fq     - Принудительный выход (немедленно)\n-------------------------");
-        }
+            print_cmd_response("--- ДОСТУПНЫЕ КОМАНДЫ ---\n  s      - Сменить аккаунт\n  status - Состояние очередей\n  logs   - Вывести логи\n  ping   - Ручной запрос задач\n  clear  - Очистить консоль\n  q      - Выход\n  fq     - Принудительный выход\n-------------------------");        }
         else {
             print_cmd_response("Неизвестная команда. Введите 'h' для справки.");
-            log_message("SYSTEM", "Unknown command entered: " + cmd);
         }
     }
 
-    // Будим все потоки для корректного завершения
-    cv_timer.notify_all();
-    cv_workers.notify_all();
-    cv_workers1.notify_all();
-
+    // Завершение
     t0.join(); t1.join(); t2.join(); t3.join();
     t4.join(); t5.join(); t6.join();
 
-    // Сдвигаем вывод финального сообщения ниже нашего интерфейса
-    std::cout << "\033[15;1HПрограмма завершена.\n";
+    // ВОЗВРАЩАЕМ ПОЛЬЗОВАТЕЛЮ НОРМАЛЬНЫЙ ТЕРМИНАЛ ПЕРЕД ВЫХОДОМ
+    std::cout << "\033[?1049l";
+    std::cout << "Программа завершена успешно.\n";
     return 0;
 }
 

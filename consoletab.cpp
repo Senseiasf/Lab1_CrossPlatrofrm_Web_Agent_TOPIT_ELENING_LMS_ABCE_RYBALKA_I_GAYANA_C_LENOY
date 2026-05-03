@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <chrono>
+#include <atomic>
 
 std::string get_time_str() {
     auto now = std::chrono::system_clock::now();
@@ -19,15 +20,22 @@ std::string get_time_str() {
 }
 
 std::mutex console_mutex;
+std::atomic<bool> ui_paused{false}; // Флаг заморозки фоновой отрисовки
 
 struct ConsoleTable {
     std::vector<std::string> lines;
 
     void set_line(int line_num, const std::string& text) {
         if (line_num >= lines.size()) {
-            lines.resize(line_num + 1);
+            lines.resize(line_num + 1, ""); // Заполняем новые ячейки пустыми строками
         }
-        lines[line_num] = get_time_str() + " " + text;
+        
+        // Если текст пустой или состоит только из пробелов — строка остается пустой (без времени)
+        if (text.empty() || text.find_first_not_of(' ') == std::string::npos) {
+            lines[line_num] = ""; 
+        } else {
+            lines[line_num] = get_time_str() + " " + text;
+        }
     }
 
     void render() {
@@ -51,27 +59,36 @@ struct ConsoleTable {
 
 ConsoleTable table;
 
+// --- ФУНКЦИЯ УПРАВЛЕНИЯ ПАУЗОЙ ---
+void pause_ui(bool pause) {
+    ui_paused = pause;
+    // Если мы снимаем интерфейс с паузы, принудительно перерисовываем весь дашборд
+    if (!pause) {
+        std::lock_guard<std::mutex> lock(console_mutex);
+        table.render(); 
+    }
+}
+
 void update_console(int line, const std::string& text) {
 #ifndef SEQ_OUT
     std::lock_guard<std::mutex> lock(console_mutex);
     table.set_line(line, text);
-    table.render();
+    
+    // Отрисовываем, только если интерфейс не заморожен
+    if (!ui_paused.load()) {
+        table.render();
+    }
 #endif
 }
 
 void init_console(void) {
-    std::cout << "\033[2J\033[H"; // Полная очистка экрана при старте
-    update_console(0, "[Таймер] Ожидание...");
-    update_console(1, "[Рабочий 1] Ожидание...");
-    update_console(2, "[Рабочий 2] Ожидание...");
-    update_console(3, "[Рабочий 3] Ожидание...");
-    update_console(4, "[Загрузчик 1] Ожидание...");
-    update_console(5, "[Загрузчик 2] Ожидание...");
-    update_console(6, "[Загрузчик 3] Ожидание...");
+    std::cout << "\033[2J\033[1;1H"; // Чистим текущий экран и ставим курсор в (1,1)
+    std::cout.flush();
+    // Вектор table.lines НЕ очищаем!
 }
 
 // =========================================================================
-// НОВЫЙ БЛОК: ФУНКЦИИ УПРАВЛЕНИЯ ИНТЕРАКТИВНЫМ МЕНЮ (НИЖНЯЯ ЧАСТЬ ЭКРАНА)
+// БЛОК: ФУНКЦИИ УПРАВЛЕНИЯ ИНТЕРАКТИВНЫМ МЕНЮ (НИЖНЯЯ ЧАСТЬ ЭКРАНА)
 // =========================================================================
 
 /**
