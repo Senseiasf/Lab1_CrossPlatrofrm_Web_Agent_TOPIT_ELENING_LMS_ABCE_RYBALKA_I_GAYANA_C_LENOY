@@ -22,6 +22,9 @@
 #include <nlohmann/json.hpp>
 #include "json_functions.h"
 #include "logger.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 void pause_ui(bool pause);
 
@@ -653,19 +656,24 @@ void interactive_auth_menu(bool force_menu) {
     bool need_interactive = force_menu;
 
     // Авто-вход только если меню не вызвано принудительно командой 's'
-    if (!force_menu && !last_active_uid.empty() && keychain.count(last_active_uid)) {
-        UID = last_active_uid;
-        access_code = keychain[UID];
-        //std::cout << "\n[Система] Автоматический вход с UID: " << UID << "\n";
-        need_interactive = false;
+    if (!force_menu) {
+        if (!last_active_uid.empty() && keychain.count(last_active_uid)) {
+            // Данные есть — пытаемся зайти автоматически
+            UID = last_active_uid;
+            access_code = keychain[UID];
+            need_interactive = false; // Отменяем показ меню
 
-        std::string json_response, temp_code;
-        client_registration(UID, json_response);
-        int reg_status = parse_registration_response(json_response, temp_code);
-        if (reg_status == 0 || (reg_status == -3 && !temp_code.empty())) {
-            std::lock_guard<std::mutex> auth_lock(auth_mtx);
-            access_code = temp_code; 
-            keychain[UID] = access_code;
+            std::string json_response, temp_code;
+            client_registration(UID, json_response);
+            int reg_status = parse_registration_response(json_response, temp_code);
+            if (reg_status == 0 || (reg_status == -3 && !temp_code.empty())) {
+                std::lock_guard<std::mutex> auth_lock(auth_mtx);
+                access_code = temp_code; 
+                keychain[UID] = access_code;
+            }
+        } else {
+            // Данных нет (первый запуск или пустой файл) — ПРИНУДИТЕЛЬНО показываем меню
+            need_interactive = true;
         }
     }
 
@@ -771,6 +779,11 @@ int main() {
     // Инициализация генератора случайных чисел
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
 
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8); // Устанавливаем кодировку вывода в UTF-8
+    SetConsoleCP(CP_UTF8);       // Устанавливаем кодировку ввода в UTF-8
+#endif
+    
     try {
         fs::path base_path = fs::current_path();
         DATA_DIR = base_path / "data";
