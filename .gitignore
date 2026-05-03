@@ -2,3 +2,4 @@
 /logs/
 *.o
 WebAgent
+/data/

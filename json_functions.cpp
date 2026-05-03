@@ -1,7 +1,7 @@
 /**
  * @file json_functions.cpp
- * @brief Модуль обработки JSON-ответов от сервера.
- * Выполняет десериализацию данных и извлечение управляющих параметров (токены, ID сессий).
+ * @brief Module for processing JSON responses from the server.
+ * Performs data deserialization and extraction of control parameters (tokens, session IDs).
  */
 #include <iostream>
 #include <string>
@@ -12,15 +12,15 @@
 using json = nlohmann::json;
 
 /**
- * @brief Парсинг ответа при регистрации агента.
- * @param jsonResponse Необработанный JSON-текст от сервера.
- * @param out_access_code [out] Ссылка для сохранения полученного кода доступа.
- * @return int Статус регистрации:
- * 0 - Успешная новая регистрация.
- * -3 - Агент уже зарегистрирован (используем существующий код).
- * -1 - Ошибка парсинга или отсутствие обязательных полей.
- * * Логика: Извлекает "access_code", который необходим для всех последующих
- * авторизованных запросов к API.
+ * @brief Parsing the response during agent registration.
+ * @param jsonResponse Raw JSON text from the server.
+ * @param out_access_code [out] Reference to store the received access code.
+ * @return int Registration status:
+ * 0 - Successful new registration.
+ * -3 - Agent is already registered (using existing code).
+ * -1 - Parsing error or missing mandatory fields.
+ * * Logic: Extracts the "access_code", which is required for all subsequent
+ * authorized requests to the API.
  */
 int parse_registration_response(const std::string& jsonResponse, std::string& out_access_code)
 {
@@ -53,15 +53,15 @@ int parse_registration_response(const std::string& jsonResponse, std::string& ou
 }
 
 /**
- * @brief Парсинг ответа при опросе сервера на наличие задач.
- * @param jsonResponse Необработанный JSON-текст от сервера.
- * @param out_session_id [out] Ссылка для сохранения ID текущей сессии задачи.
- * @return int Статус задачи:
- * 1 - Новая задача получена.
- * 0 - Задач на сервере нет (режим ожидания).
- * -1 - Ошибка формата JSON или сетевого протокола.
- * * Логика: Проверяет "code_responce". При значении "1" фиксирует "session_id",
- * который связывает процесс обработки файла и последующую отправку результата.
+ * @brief Parsing the response when polling the server for tasks.
+ * @param jsonResponse Raw JSON text from the server.
+ * @param out_session_id [out] Reference to store the current task session ID.
+ * @return int Task status:
+ * 1 - New task received.
+ * 0 - No tasks on the server (standby mode).
+ * -1 - JSON format or network protocol error.
+ * * Logic: Checks "code_responce". If the value is "1", it captures the "session_id",
+ * which links the file processing and subsequent result uploading.
  */
 int parse_req_task(const std::string& jsonResponse, std::string& out_session_id)
 {

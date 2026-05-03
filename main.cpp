@@ -66,22 +66,20 @@ std::atomic<bool> stop_flag{false};
 std::atomic<bool> ping_flag{false};
 
 /**
- * @brief Запускает внешнюю программу. Если в строке C++ код, компилирует его.
+ * @brief Executes an external program. If the string contains C++ code, it compiles it.
  */
 std::string run_task_logic(const std::string& cmd) {
-    // 1. Создаем папку workspace (если ее нет)
+    // 1. Create workspace folder (if it doesn't exist)
     fs::path base_path = fs::current_path();
     fs::path workspace_dir = base_path / "data" / "workspace";
     fs::create_directories(workspace_dir);
 
     std::string final_cmd = cmd;
 
-    // 2. Проверка на наличие C++ кода
+    // 2. Check for C++ code presence
     if (cmd.find("std::") != std::string::npos || cmd.find("main()") != std::string::npos) {
-        // Создаем исходник прямо в workspace
         fs::path cpp_file = workspace_dir / "temp_task.cpp";
         std::ofstream temp_cpp(cpp_file);
-        // Добавим базовые инклуды для стабильности
         temp_cpp << "#include <iostream>\n#include <vector>\n#include <string>\n";
         temp_cpp << "int main() { " << cmd << " return 0; }";
         temp_cpp.close();
@@ -93,59 +91,90 @@ std::string run_task_logic(const std::string& cmd) {
 #ifdef _WIN32
         out_binary = "temp_task.exe";
         run_command = out_binary; 
-        // Команда компиляции (переходим в workspace перед вызовом g++)
         compile_cmd = "cd /d \"" + workspace_dir.string() + "\" && g++ temp_task.cpp -o " + out_binary + " > compile_log.txt 2>&1";
 #else
         out_binary = "temp_task.out";
         run_command = "./" + out_binary; 
-        // Команда компиляции для Linux
         compile_cmd = "cd \"" + workspace_dir.string() + "\" && g++ temp_task.cpp -o " + out_binary + " > compile_log.txt 2>&1";
 #endif
 
         if (system(compile_cmd.c_str()) == 0) {
             final_cmd = run_command;
         } else {
-            // Читаем лог ошибок из workspace
             fs::path err_file_path = workspace_dir / "compile_log.txt";
             std::ifstream err_file(err_file_path);
             std::string err_content((std::istreambuf_iterator<char>(err_file)),
                                      std::istreambuf_iterator<char>());
             
-            if (err_content.empty()) err_content = "Неизвестная ошибка компиляции g++.";
-            return "ОШИБКА КОМПИЛЯЦИИ C++:\n" + err_content;
+            if (err_content.empty()) err_content = "Unknown g++ compilation error.";
+            return "C++ COMPILATION ERROR:\n" + err_content;
         }
     }
 
-    // 3. Выполнение команды (с переходом в workspace)
+    // --- NEW LOGIC: INTERACTIVITY CHECK ---
+    bool is_interactive = false;
+    std::string first_word = final_cmd.substr(0, final_cmd.find(' '));
+    
+    // Keep ONLY GRAPHICAL editors that open separate windows.
+    // Windows: notepad, notepad.exe
+    // Linux: gedit, mousepad, kate, gnome-text-editor
+    // macOS: open (command 'open -e file' opens standard TextEdit)
+    if (first_word == "notepad" || first_word == "notepad.exe" || 
+        first_word == "gedit" || first_word == "mousepad" || first_word == "kate" ||
+        first_word == "gnome-text-editor" || first_word == "open") {
+        is_interactive = true;
+    }
+
+    // Form the final command with transition to the working directory
+    std::string exec_cmd;
+#ifdef _WIN32
+    exec_cmd = "cd /d \"" + workspace_dir.string() + "\" && " + final_cmd;
+    if (!is_interactive) exec_cmd += " 2>&1"; // Catch errors only for background tasks
+#else
+    exec_cmd = "cd \"" + workspace_dir.string() + "\" && " + final_cmd;
+    if (!is_interactive) exec_cmd += " 2>&1";
+#endif
+
+    // If the editor is interactive (opens a window), give it focus
+    if (is_interactive) {
+        int ret = system(exec_cmd.c_str());
+        
+        // If the graphical editor is not installed or crashed (ret != 0)
+        if (ret != 0) {
+            return "Error: GUI editor (" + first_word + ") is not installed or failed to start. Return code: " + std::to_string(ret);
+        }
+        
+        // Success: Return empty string (worker_thread will send only the file itself)
+        return ""; 
+    }
+
+    // 3. Execution of background command via pipe
     std::array<char, 128> buffer;
     std::string result;
-    std::string exec_cmd;
     
 #ifdef _WIN32
-    exec_cmd = "cd /d \"" + workspace_dir.string() + "\" && " + final_cmd + " 2>&1";
     std::unique_ptr<FILE, int (*)(FILE*)> pipe(_popen(exec_cmd.c_str(), "r"), _pclose);
 #else
-    exec_cmd = "cd \"" + workspace_dir.string() + "\" && " + final_cmd + " 2>&1";
     std::unique_ptr<FILE, int (*)(FILE*)> pipe(popen(exec_cmd.c_str(), "r"), pclose);
 #endif
 
-    if (!pipe) return "Ошибка: Не удалось открыть канал (pipe) для выполнения.";
+    if (!pipe) return "Error: Failed to open pipe for execution.";
     
     while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
         result += buffer.data();
     }
     
-    return result.empty() ? "Программа выполнена успешно (вывод пуст)." : result;
+    return result.empty() ? "Program executed successfully (empty output)." : result;
 }
 
 /**
- * @brief Запускает внешнюю программу и захватывает её стандартный вывод (STDOUT).
+ * @brief Executes an external program and captures its standard output (STDOUT).
  */
 std::string execute_external_program(const std::string& cmd) {
     std::array<char, 128> buffer;
     std::string result;
     
-    // Используем popen для чтения вывода консольной команды
+    // Use popen to read the output of the console command
 #ifdef _WIN32
     std::unique_ptr<FILE, int (*)(FILE*)> pipe(_popen(cmd.c_str(), "r"), _pclose);
 #else
@@ -153,26 +182,25 @@ std::string execute_external_program(const std::string& cmd) {
 #endif
 
     if (!pipe) {
-        return "Ошибка: Не удалось запустить программу.";
+        return "Error: Failed to execute program.";
     }
     
     while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
         result += buffer.data();
     }
     
-    return result.empty() ? "Программа выполнена, вывод пуст." : result;
+    return result.empty() ? "Program executed successfully (empty output)." : result;
 }
 
-
 /**
- * @brief Выполняет системную команду и возвращает её вывод.
- * @param cmd Строка команды (из поля options).
- * @return std::string Результат выполнения программы.
+ * @brief Executes a system command and returns its output.
+ * @param cmd Command string (from the options field).
+ * @return std::string Result of the program execution.
  */
 std::string exec_command(const char* cmd) {
     std::array<char, 128> buffer;
     std::string result;
-    // "r" означает чтение вывода команды
+    // "r" means reading the command output
 #ifdef _WIN32
     std::unique_ptr<FILE, int (*)(FILE*)> pipe(_popen(cmd, "r"), _pclose);
 #else
@@ -180,7 +208,7 @@ std::string exec_command(const char* cmd) {
 #endif
 
     if (!pipe) {
-        return "Ошибка: Не удалось запустить программу.";
+        return "Error: Failed to start the program.";
     }
 
     while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
@@ -190,18 +218,18 @@ std::string exec_command(const char* cmd) {
 }
 
 /**
- * @brief Поток-таймер (ПОТОК 0).
- * Основная задача: Периодический опрос сервера на наличие новых заданий.
- * * Логика:
- * 1. Ожидает заданный интервал времени.
- * 2. Делает запрос к серверу.
- * 3. Если пришла задача ("1"): создает файл и пушит задачу воркерам, ускоряет опрос до 5с.
- * 4. Если пришел "TIMEOUT": меняет интервал опроса.
- * 5. Если задач нет: возвращается к стандартному режиму (20с).
+ * @brief Timer thread (THREAD 0).
+ * Main task: Periodic polling of the server for new tasks.
+ * * Logic:
+ * 1. Waits for the specified time interval.
+ * 2. Makes a request to the server.
+ * 3. If a task arrives ("1"): creates a file and pushes the task to workers, speeds up polling to 5s.
+ * 4. If "TIMEOUT" arrives: changes the polling interval.
+ * 5. If no tasks: returns to standard mode (20s).
  */
 void timer_thread() {
     while (true) {
-        // Обновляем статус ПЕРЕД уходом в сон (убрали UID отсюда)
+        // Обновляем статус ПЕРЕД уходом в сон (оставляем для пользователя на русском)
         update_console(0, "[Таймер | " + std::to_string(current_polling_interval) + "с] Ожидание...");
 
         {
@@ -213,7 +241,7 @@ void timer_thread() {
             
             if (stop_flag.load()) break;
 
-            // Если проснулись от пинга — реагируем визуально
+            // Если проснулись от пинга — реагируем визуально (для пользователя на русском)
             if (ping_flag.load()) {
                 ping_flag = false; // Сбрасываем флаг
                 update_console(0, "[Таймер] Внеочередной ручной опрос сервера...");
@@ -257,7 +285,8 @@ void timer_thread() {
                 
                 if (current_polling_interval < 5) current_polling_interval = 5;
 
-                log_message("TIMER", "Сервер изменил время запроса: " + std::to_string(current_polling_interval));
+                // Этот лог уходит на сервер, поэтому переводим на английский
+                log_message("TIMER", "Server changed polling interval to: " + std::to_string(current_polling_interval));
                 update_console(0, "[Таймер] Пауза от сервера: " + std::to_string(current_polling_interval) + "с");
                 std::this_thread::sleep_for(std::chrono::seconds(2));
             }
@@ -266,7 +295,8 @@ void timer_thread() {
                 std::string task_type = j.value("task_code", "");
                 std::string options = j.value("options", "");
 
-                log_message("TIMER", "Новая задача: " + task_type);
+                // Переводим лог
+                log_message("TIMER", "New task received: " + task_type);
                 update_console(0, "[Таймер | " + std::to_string(current_polling_interval) + "с] Отдал задачу воркеру");
 
                 Task new_task;
@@ -298,15 +328,14 @@ void timer_thread() {
     }
 }
 
-
 /**
- * @brief Потоки первичной обработки (ПОТОКИ 1, 2, 3).
- * @param id Уникальный номер потока.
- * * Роль: Имитирует выполнение работы над задачей.
- * 1. Получает задачу из первой очереди.
- * 2. Анализирует task_code (CONF, FILE, TASK).
- * 3. Выполняет задержку (имитация работы).
- * 4. Передает задачу во вторую очередь для загрузки на сервер.
+ * @brief Primary processing threads (THREADS 1, 2, 3).
+ * @param id Unique thread ID.
+ * * Role: Simulates task execution.
+ * 1. Receives a task from the first queue.
+ * 2. Analyzes task_code (CONF, FILE, TASK).
+ * 3. Simulates execution delay.
+ * 4. Passes the task to the second queue for uploading to the server.
  */
 void worker_thread(int id) {
     int line = id;
@@ -333,7 +362,7 @@ void worker_thread(int id) {
         else task_info += "Выполняю " + current_task.task_code + "...";
 
         update_console(line, task_info);
-        log_message("WORKER_" + std::to_string(id), "Взял в работу задачу: " + current_task.task_code);
+        log_message("WORKER_" + std::to_string(id), "Took task into processing: " + current_task.task_code);
 
         // --- ВЫПОЛНЕНИЕ РЕАЛЬНОЙ ЛОГИКИ ---
         
@@ -374,11 +403,11 @@ void worker_thread(int id) {
             }
 
             // 3. Решаем, нужен ли текстовый файл-отчет
-            if (output.find("успешно (вывод пуст)") == std::string::npos && !output.empty()) {
+            if (output.find("successfully (empty output)") == std::string::npos && !output.empty()) {
                 create_res_file = true; 
             } else if (current_task.file_paths.empty()) {
                 create_res_file = true; 
-                output = "Команда выполнена, вывод пуст, файлы не найдены.";
+                output = "Command executed, output is empty, no files found.";
             }
         } 
         else if (current_task.task_code == "CONF") {
@@ -425,17 +454,17 @@ void worker_thread(int id) {
                 }
 
                 if (reg_status == 0) {
-                    output = "Конфигурация успешно обновлена. Новый UID: " + new_uid + ". Получен новый access_code.";
-                    log_message("WORKER_" + std::to_string(id), "Успешная регистрация нового UID: " + new_uid);
+                    output = "Configuration updated successfully. New UID: " + new_uid + ". Received new access_code.";
+                    log_message("WORKER_" + std::to_string(id), "Successful registration of new UID: " + new_uid);
                 } else if (reg_status == -3) {
-                    output = "Конфигурация обновлена. Вернулись на UID: " + new_uid + ". Использован локальный/серверный код.";
-                    log_message("WORKER_" + std::to_string(id), "Установлен старый UID: " + new_uid);
+                    output = "Configuration updated. Reverted to UID: " + new_uid + ". Used local/server code.";
+                    log_message("WORKER_" + std::to_string(id), "Set old UID: " + new_uid);
                 } else {
-                    output = "Ошибка перерегистрации! Откат изменений. Текущий UID остался: " + old_uid;
-                    log_message("ERROR", "Сбой конфигурации. Возврат к старому UID: " + old_uid);
+                    output = "Re-registration error! Rolling back changes. Current UID remains: " + old_uid;
+                    log_message("ERROR", "Configuration failure. Reverted to old UID: " + old_uid);
                 }
             } else {
-                output = "Ошибка: Сервер прислал команду CONF без указания нового UID.";
+                output = "Error: Server sent CONF command without specifying a new UID.";
             }
             create_res_file = true; 
         }
@@ -484,20 +513,20 @@ void worker_thread(int id) {
                             output += l + "\n";
                         }
                     }
-                    log_message("WORKER_" + std::to_string(id), "Логи успешно считаны для отправки");
+                    log_message("WORKER_" + std::to_string(id), "Logs successfully read for sending");
                 } else {
-                    output = "Ошибка: Файл логов найден, но не может быть прочитан.";
-                    log_message("ERROR", "Не смог открыть лог-файл для чтения");
+                    output = "Error: Log file found, but cannot be read.";
+                    log_message("ERROR", "Failed to open log file for reading");
                 }
             } else {
-                output = "Ошибка: Папка logs пуста или не существует.";
-                log_message("ERROR", "Команда FILE: логи не найдены");
+                output = "Error: Logs folder is empty or does not exist.";
+                log_message("ERROR", "FILE command: logs not found");
             }
             create_res_file = true; 
         }
         else {
             std::this_thread::sleep_for(std::chrono::milliseconds(TO_WORKER_THREAD));
-            output = "Неизвестная команда выполнена (заглушка). Код: " + current_task.task_code;
+            output = "Unknown command executed (stub). Code: " + current_task.task_code;
             create_res_file = true; 
         }
 
@@ -528,12 +557,8 @@ void worker_thread(int id) {
 }
 
 /**
- * @brief Потоки отправки данных (ПОТОКИ 4, 5, 6 / Uploader).
- * @param id Уникальный номер потока.
- * * Роль: Финальный этап конвейера.
- * 1. Ожидает готовые задачи во второй очереди.
- * 2. Отправляет файл на сервер через HTTP POST (upload_results).
- * 3. Логирует ответ сервера.
+ * @brief Secondary processing threads (THREADS 4, 5, 6) for uploading results.
+ * @param id Unique thread ID.
  */
 void worker_thread1(int id) {
     int line = id;
@@ -557,7 +582,7 @@ void worker_thread1(int id) {
 
 #ifdef WORK_WITH_SERVICE
         std::string json_response;
-        // --- БЕЗОПАСНОЕ ЧТЕНИЕ АВТОРИЗАЦИИ ---
+        // --- SAFE AUTHORIZATION READ ---
         std::string safe_uid, safe_access_code;
         {
             std::lock_guard<std::mutex> auth_lock(auth_mtx);
@@ -565,22 +590,22 @@ void worker_thread1(int id) {
             safe_access_code = access_code;
         }
 
-        // Используем safe_uid и safe_access_code вместо глобальных
+        // Using safe_uid and safe_access_code instead of globals
         int res = upload_results(safe_uid, safe_access_code, file_to_upload, current_task.session_id, json_response);
 
         if (res == 0) {
             update_console(line, "[Рабочий " + std::to_string(id) + "] Успешно! Ответ: " + json_response);
-            log_message("UPLOADER", "Файл отправлен. SID: " + current_task.session_id);
+            log_message("UPLOADER", "File uploaded. SID: " + current_task.session_id);
         } else {
             update_console(line, "[Рабочий " + std::to_string(id) + "] Ошибка отправки!");
-            log_message("ERROR", "Ошибка Uploader: " + std::to_string(res));
+            log_message("ERROR", "Uploader error: " + std::to_string(res));
         }
 #endif
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 }
 
-// --- ФУНКЦИЯ 1: БЕЗОПАСНОЕ СОХРАНЕНИЕ ---
+// --- FUNCTION 1: SAFE KEYCHAIN SAVING ---
 void save_keychain_safe() {
     fs::path keychain_path = fs::current_path() / "keychain.json";
     fs::path temp_path = fs::current_path() / "keychain_temp.json";
@@ -589,25 +614,25 @@ void save_keychain_safe() {
         json j;
         {
             std::lock_guard<std::mutex> auth_lock(auth_mtx);
-            // Защита: если память пуста, ничего не перезаписываем!
+            // Protection: if memory is empty, do not overwrite anything!
             if (UID.empty() && keychain.empty()) return; 
             
             j["last_active_uid"] = UID;
             j["tokens"] = keychain;
         }
         
-        // Пишем во временный файл
+        // Write to a temporary file
         std::ofstream kc_out(temp_path);
         if (kc_out.is_open()) {
             kc_out << j.dump(4);
             kc_out.close();
             
-            // Атомарная замена: переименовываем поверх старого. 
-            // Это защищает от обнуления при вылете во время записи.
+            // Atomic replacement: rename over the old one. 
+            // This protects against corruption if the app crashes during a write.
             fs::rename(temp_path, keychain_path); 
         }
     } catch (...) {
-        log_message("ERROR", "Сбой при безопасном сохранении ключей.");
+        log_message("ERROR", "Failure during safe keychain save.");
     }
 }
 
@@ -617,8 +642,8 @@ void update_uid_display() {
         std::lock_guard<std::mutex> auth_lock(auth_mtx);
         current_uid = UID.empty() ? "НЕ ЗАДАН" : UID;
     }
-    // Выводим глобальный статус на свободную 7-ю строку
-    update_console(7, "[СИСТЕМА] Текущий активный UID: " + current_uid);
+    // Display global status on the free 7th line
+    update_console(7, "[Система] Текущий UID: " + current_uid);
 }
 
 // --- ФУНКЦИЯ 2: ИНТЕРАКТИВНОЕ МЕНЮ АВТОРИЗАЦИИ ---
@@ -793,25 +818,27 @@ int main() {
     // --- КОМАНДНЫЙ ИНТЕРФЕЙС УПРАВЛЕНИЯ ---
     std::string cmd;
     
-while (true) {
+    while (true) {
         prompt_input(); 
         std::cin >> cmd;
 
         if (cmd == "q") {
             print_cmd_response("[Система] Запущена процедура безопасного выхода...\n[Система] Дожидаемся завершения активных задач (это может занять время).");
-            log_message("SYSTEM", "Пользователь инициировал безопасный выход (q). Ожидание завершения потоков...");
+            log_message("SYSTEM", "User initiated safe exit (q). Waiting for threads to finish...");
             std::lock_guard<std::mutex> lock(mtx);
             stop_flag = true;
             break; 
         } 
         else if (cmd == "fq") {
             print_cmd_response("[FATAL] Принудительное завершение агента!");
-            log_message("SYSTEM", "Пользователь инициировал принудительное завершение (fq)!");
-            std::exit(0); 
+            log_message("SYSTEM", "User initiated forced termination (fq)!");
+            std::cout << "\033[15;1H\n";
+            std::cout.flush();
+            std::_Exit(0); 
         }
         else if (cmd == "s") {
             print_cmd_response("[Система] Ожидание завершения текущих задач перед сменой аккаунта...");
-            log_message("SYSTEM", "Запрошена смена аккаунта (s). Ожидание завершения задач...");
+            log_message("SYSTEM", "Account change requested (s). Waiting for tasks to finish...");
             
             while (!task_queue.empty()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -822,7 +849,7 @@ while (true) {
             interactive_auth_menu(true);
             
             draw_cmd_header();
-            log_message("SYSTEM", "Аккаунт успешно изменен на UID: " + (UID.empty() ? "НЕ ЗАДАН" : UID));
+            log_message("SYSTEM", "Account successfully changed to UID: " + (UID.empty() ? "NOT SET" : UID));
         }
         else if (cmd == "status") {
             std::string st = "=== СТАТУС АГЕНТА ===\nАктивный UID: " + UID + 
@@ -830,17 +857,17 @@ while (true) {
                              "\nФайлов на отправку: " + std::to_string(task_queue1.size()) + 
                              "\n=====================";
             print_cmd_response(st);
-            log_message("SYSTEM", "Пользователь запросил статус агента");
+            log_message("SYSTEM", "User requested agent status");
         }
         else if (cmd == "ping") {
             print_cmd_response("[Система] Принудительный опрос сервера...");
-            log_message("SYSTEM", "Отправлен ручной ping серверу");
+            log_message("SYSTEM", "Manual ping sent to server");
             ping_flag = true; 
             cv_timer.notify_all(); 
         }
         else if (cmd == "clear") {
             print_cmd_response(""); 
-            log_message("SYSTEM", "Очистка вывода консоли (clear)");
+            log_message("SYSTEM", "Console output cleared (clear)");
         }
         else if (cmd == "logs") {
             std::string log_output = "=== ПОСЛЕДНИЕ СИСТЕМНЫЕ ЛОГИ ===\n";
@@ -848,7 +875,6 @@ while (true) {
             std::string latest_log_path = "";
             auto last_time = fs::file_time_type::min();
 
-            // 1. Ищем самый свежий файл логов
             if (fs::exists(logs_dir) && fs::is_directory(logs_dir)) {
                 for (const auto& entry : fs::directory_iterator(logs_dir)) {
                     if (entry.is_regular_file()) {
@@ -861,7 +887,6 @@ while (true) {
                 }
             }
 
-            // 2. Читаем последние 10 строк через скользящее окно (deque)
             if (!latest_log_path.empty()) {
                 std::ifstream log_file(latest_log_path);
                 if (log_file.is_open()) {
@@ -870,7 +895,7 @@ while (true) {
                     while (std::getline(log_file, line_str)) {
                         buffer.push_back(line_str);
                         if (buffer.size() > 10) {
-                            buffer.pop_front(); // Выталкиваем старые строки
+                            buffer.pop_front(); 
                         }
                     }
                     
@@ -890,20 +915,47 @@ while (true) {
             }
             
             print_cmd_response(log_output);
-            log_message("SYSTEM", "Пользователь запросил вывод логов (logs)");
+            log_message("SYSTEM", "User requested logs output (logs)");
         }
         else if (cmd == "GOL") {
-            print_cmd_response("============================================\n * * * ПАСХАЛКА: ИГРА 'ЖИЗНЬ' CONWAY * * *\n (Ожидайте графический рендер в версии 2.0)\n============================================");
-            log_message("SYSTEM", "Пользователь нашел пасхалку (GOL)");
+            // Пишем в логи, как ты и просил
+            log_message("SYSTEM", "GOOOOOOOOOOOOOOL");
+
+            // --- МАГИЯ АЛЬТЕРНАТИВНОГО БУФЕРА ЭКРАНА ---
+            // \033[?1049h - переключиться на резервный чистый экран
+            // \033[H - курсор в левый верхний угол
+            std::cout << "\033[?1049h\033[H"; 
+            
+            std::cout << "\n\n\n\n";
+            std::cout << "   ██████╗  ██████╗  ██████╗  ██████╗  █████╗ \n";
+            std::cout << "   ██╔════╝ ██╔═══██╗██╔═══██╗██╔═══██╗██╔══██╗\n";
+            std::cout << "   ██║      ██║   ██║██║   ██║██║   ██║██║  ██║\n";
+            std::cout << "   ██║      ██║   ██║██║   ██║██║   ██║██║  ██║\n";
+            std::cout << "   ██║      ╚██████╔╝╚██████╔╝╚██████╔╝██║  ██║\n";
+            std::cout << "   ╚═╝       ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝\n";
+            
+            std::cout << "\n\n   >>> АГЕНТ (UID: " << (UID.empty() ? "АНОНИМ" : UID) << ") ЗАБИЛ ГОЛ! <<<\n";
+            std::cout.flush();
+
+            // Ждем 0.3 секунды
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+            // \033[?1049l - возвращаемся на основной экран (всё восстанавливается!)
+            std::cout << "\033[?1049l"; 
+            std::cout.flush();
+
+            // Выводим текст в интерфейсе
+            print_cmd_response("Что это было? Наверное, показалось.");
         }
         else if (cmd == "h" || cmd == "help") {
             print_cmd_response("--- ДОСТУПНЫЕ КОМАНДЫ ---\n  s      - Сменить аккаунт (UID)\n  status - Статус очередей и агента\n  logs   - Вывести последние 10 строк логов\n  ping   - Принудительно запросить задачу у сервера\n  clear  - Очистить экран\n  q      - Безопасный выход (дождаться задач)\n  fq     - Принудительный выход (немедленно)\n-------------------------");
         }
         else {
             print_cmd_response("Неизвестная команда. Введите 'h' для справки.");
-            log_message("SYSTEM", "Введена неизвестная команда: " + cmd);
+            log_message("SYSTEM", "Unknown command entered: " + cmd);
         }
     }
+
     // Будим все потоки для корректного завершения
     cv_timer.notify_all();
     cv_workers.notify_all();

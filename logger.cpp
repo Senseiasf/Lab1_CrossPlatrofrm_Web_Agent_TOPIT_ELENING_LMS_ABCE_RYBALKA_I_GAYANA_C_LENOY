@@ -1,7 +1,7 @@
 /**
  * @file logger.cpp
- * @brief Модуль ведения системных журналов (логов).
- * Обеспечивает централизованную и потокобезопасную запись событий работы агента.
+ * @brief System logging module.
+ * Provides centralized and thread-safe recording of agent events.
  */
 #include "logger.h"
 #include <iostream>
@@ -13,16 +13,16 @@
 #include <filesystem>
 
 namespace fs = std::filesystem;
-/** @brief Глобальный мьютекс для синхронизации записи в файл из разных потоков. */
+/** @brief Global mutex for synchronizing file writes from different threads. */
 std::mutex log_mtx;
 
 
 /**
- * @brief Обеспечивает наличие папки для хранения логов.
- * @return fs::path Путь к директории "logs" относительно исполняемого файла.
- * * Логика: Проверяет существование папки "logs" в текущем рабочем каталоге.
- * Если папка отсутствует, создает её рекурсивно. Почему рекурсивно - не знаю.
- * Но работает именно так.
+ * @brief Ensures the existence of the directory for storing logs.
+ * @return fs::path Path to the "logs" directory relative to the executable.
+ * * Logic: Checks for the existence of the "logs" folder in the current working directory.
+ * If the folder is missing, creates it recursively. Why recursively - I don't know.
+ * But that's exactly how it works.
  */
 fs::path get_log_directory() {
     fs::path log_dir = fs::current_path() / "logs";
@@ -33,15 +33,15 @@ fs::path get_log_directory() {
 }
 
 /**
- * @brief Запись типового сообщения в системный лог.
- * @param module Имя модуля или уровень важности (напр., "SYSTEM", "ERROR", "UPLOADER").
- * @param message Текст сообщения для записи.
- * * * Особенности реализации:
- * 1. Thread-Safety: Использует std::lock_guard для предотвращения состояния гонки (Race Condition)
- * между рабочими потоками при обращении к одному файлу.
- * 2. Формат записи: [Дата Время] [ID Потока] [Модуль] Сообщение.
- * 3. Автономность: Сама открывает и закрывает файл в режиме std::ios::app (дозапись в конец),
- * что гарантирует сохранность данных при внезапном завершении программы.
+ * @brief Records a standard message to the system log.
+ * @param module Module name or severity level (e.g., "SYSTEM", "ERROR", "UPLOADER").
+ * @param message Message text to record.
+ * * Implementation details:
+ * 1. Thread-Safety: Uses std::lock_guard to prevent Race Conditions
+ * between worker threads when accessing the same file.
+ * 2. Log format: [Date Time] [Thread ID] [Module] Message.
+ * 3. Autonomy: Opens and closes the file itself in std::ios::app mode (append to end),
+ * which guarantees data safety in case of an unexpected program termination.
  */
 void log_message(const std::string& module, const std::string& message) {
     std::lock_guard<std::mutex> lock(log_mtx);
@@ -59,6 +59,6 @@ void log_message(const std::string& module, const std::string& message) {
 
         log_file.close();
     } else {
-        std::cerr << "[CRITICAL ERROR] Не удалось открыть лог-файл: " << log_file_path << std::endl;
+        std::cerr << "[CRITICAL ERROR] Failed to open log file: " << log_file_path << std::endl;
     }
 }
