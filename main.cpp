@@ -121,13 +121,30 @@ std::string run_task_logic(const std::string& cmd) {
     std::string first_word = final_cmd.substr(0, final_cmd.find(' '));
     
     // Keep ONLY GRAPHICAL editors that open separate windows.
-    // Windows: notepad, notepad.exe
-    // Linux: gedit, mousepad, kate, gnome-text-editor
-    // macOS: open (command 'open -e file' opens standard TextEdit)
     if (first_word == "notepad" || first_word == "notepad.exe" || 
         first_word == "gedit" || first_word == "mousepad" || first_word == "kate" ||
         first_word == "gnome-text-editor" || first_word == "open") {
+        
         is_interactive = true;
+
+        // --- ФИКС ДЛЯ БЛОКНОТА: Тихо создаем файл до запуска редактора ---
+        size_t space_pos = final_cmd.find(' ');
+        if (space_pos != std::string::npos) {
+            std::string filename = final_cmd.substr(space_pos + 1);
+            // Убираем лишние пробелы перед именем файла, если они есть
+            size_t start = filename.find_first_not_of(" \t");
+            if (start != std::string::npos) {
+                filename = filename.substr(start);
+                fs::path target_file = workspace_dir / filename;
+                
+                // Если файла еще нет в workspace, создаем его пустым
+                if (!fs::exists(target_file)) {
+                    std::ofstream touch_file(target_file);
+                    touch_file.close();
+                }
+            }
+        }
+        // ------------------------------------------------------------------
     }
 
     // Form the final command with transition to the working directory
