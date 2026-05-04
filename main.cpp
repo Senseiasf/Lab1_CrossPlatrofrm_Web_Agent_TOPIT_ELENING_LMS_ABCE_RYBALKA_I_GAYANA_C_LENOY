@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include <iostream>
 #include <thread>
 #include <mutex>
