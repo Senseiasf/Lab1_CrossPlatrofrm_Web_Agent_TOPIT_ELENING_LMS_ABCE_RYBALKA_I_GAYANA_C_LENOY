@@ -19,14 +19,8 @@ using json = nlohmann::json;
  * записывает тело ответа в json_response для дальнейшего парсинга в таймер-потоке.
  */
 int req_task(std::string & uid, std::string & access_code, std::string & json_response, std::string url = "https://xdev.arkcom.ru:9999/app/webagent1/api/wa_task/") {
-    // URL для запроса
-    //std::string url = "https://jsonplaceholder.typicode.com/posts";
-
     // JSON тело запроса
-
     std::string json_body;
-
-
 
     json j;
     j["UID"] = uid;
@@ -35,18 +29,18 @@ int req_task(std::string & uid, std::string & access_code, std::string & json_re
 
     json_body = j.dump(4);
 
-
  #ifdef SEQ_OUT
     std::cout << "Sending request to: " << url << std::endl;
     std::cout << "JSON body: " << json_body << std::endl;
     std::cout << std::endl;
 #endif
 
-    // Выполняем POST запрос
+    // Выполняем POST запрос с отключенной проверкой SSL
     cpr::Response response = cpr::Post(
         cpr::Url{url},
         cpr::Header{{"Content-Type", "application/json"}},
-        cpr::Body{json_body}
+        cpr::Body{json_body},
+        cpr::VerifySsl(false) // <-- ФИКС ДЛЯ LINUX
     );
 
     // Проверяем результат
@@ -81,16 +75,12 @@ int req_task(std::string & uid, std::string & access_code, std::string & json_re
  * дальнейшая работа (req_task) невозможна. В теории не должна была меняться
  * со времён Ивана (XVI век).
  */
-int client_registration(std::string& UID,std::string& json_response) {
-    // URL для запроса
-    //std::string url = "https://jsonplaceholder.typicode.com/posts";
+/*int client_registration(std::string& UID,std::string& json_response) {
     std::string url = "https://xdev.arkcom.ru:9999/app/webagent1/api/wa_reg/";
-
 
     json j;
     j["UID"] = UID;
     j["descr"] = "web-agent";
-
 
     std::string json_body;
     json_body = j.dump(4);
@@ -100,11 +90,12 @@ int client_registration(std::string& UID,std::string& json_response) {
     std::cout << std::endl;
 #endif
 
-    // Выполняем POST запрос
+    // Выполняем POST запрос с отключенной проверкой SSL
     cpr::Response response = cpr::Post(
         cpr::Url{url},
         cpr::Header{{"Content-Type", "application/json"}},
-        cpr::Body{json_body}
+        cpr::Body{json_body},
+        cpr::VerifySsl(false) // <-- ФИКС ДЛЯ LINUX
     );
 
     // Проверяем результат
@@ -127,8 +118,37 @@ int client_registration(std::string& UID,std::string& json_response) {
     }
 
     return 0;
-}
+}*/
 
+int client_registration(std::string& UID,std::string& json_response) {
+    std::string url = "https://xdev.arkcom.ru:9999/app/webagent1/api/wa_reg/";
+
+    json j;
+    j["UID"] = UID;
+    j["descr"] = "web-agent";
+
+    std::string json_body = j.dump(4);
+
+    // Выполняем POST запрос с отключенной проверкой SSL
+    cpr::Response response = cpr::Post(
+        cpr::Url{url},
+        cpr::Header{{"Content-Type", "application/json"}},
+        cpr::Body{json_body},
+        cpr::VerifySsl(false)
+    );
+
+    if (response.status_code >= 200 && response.status_code < 300) {
+        json_response = response.text;
+    } else {
+        // --- ВРЕМЕННЫЙ ДЕБАГ: ВЫВОДИМ ОШИБКУ ПРИНУДИТЕЛЬНО ---
+        std::cout << "\n[CRITICAL DEBUG] CPR Status Code: " << response.status_code << "\n";
+        std::cout << "[CRITICAL DEBUG] CPR Error Message: " << response.error.message << "\n\n";
+        // ------------------------------------------------------
+        json_response = "";
+    }
+
+    return 0;
+}
 
 /**
  * @brief Загрузка результатов выполнения задачи на сервер.
@@ -173,21 +193,19 @@ int upload_results(const std::string& uid,
     }
 
     // 3. Формирование Multipart запроса
-    // result_code: 0 для успеха
-    // result: JSON строка с метаданными
-    // file1: содержимое файла
     cpr::Multipart multipart_form{
         {"result_code", "0"},
         {"result", result_json_payload},
         {"file1", cpr::File{file_path}}
     };
 
-    // 4. Отправка POST запроса
+    // 4. Отправка POST запроса с отключенной проверкой SSL
     try {
         cpr::Response response = cpr::Post(
             cpr::Url{"https://xdev.arkcom.ru:9999/app/webagent1/api/wa_result/"},
             multipart_form,
-            cpr::Timeout{30000}
+            cpr::Timeout{30000},
+            cpr::VerifySsl(false) // <-- ФИКС ДЛЯ LINUX
         );
 
         // 5. Разбор ответа
